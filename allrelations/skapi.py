@@ -99,7 +99,7 @@ def preprocess_dataset(dataframe, missing_values =('', ' ', '?', 'NaN')):
         else:
             concepts[concept] = [column]
 
-    concepts = {k: np.column_stack(v) for k, v in concepts.items()}
+    concepts = {k: np.column_stack(v).astype('float') for k, v in concepts.items()}
     respdata = np.column_stack(respdata) if respdata else None
     return concepts, respdata
 
@@ -206,7 +206,7 @@ def make_regressor(model_subset=None):
         estimator=estimator,
         param_grid=spaces, # knn, gbrt, dectree
         n_jobs=-1,
-        verbose=1,
+        verbose=0,
     )
 
     return model
@@ -333,7 +333,18 @@ def concept_subset(concepts, names, prefix = None):
     return result
 
 
-def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
+def get_map(X, Y, models_subset, inputs, max_iter, concepts, prefix, discount, optimizer, B):
+    # initial score
+
+
+    return [found_concepts, [B], weight]
+
+
+import joblib
+from joblib.parallel import Parallel, delayed
+
+
+def all_n_to_1(concepts, prefix=None, models_subset=None, discount=0.95, max_iter=32, optimizer=None):
     """
     Finds all one to one relations within the set of concepts.
 
@@ -347,6 +358,11 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
     prefix : array-like, shape = [n_samples, n_features]
         Features that apply to every concept.
 
+    models_subset: string or None
+        Whether to use a subset of models for estimation of mapping
+        power. For feasible options, see the similar parameter of
+        the `mapping_power` function.
+
     discount : float
         Fraction of r^2 with all concepts that should be preserved
         with the subset of concepts.
@@ -354,6 +370,8 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
     max_iter : int
         Number of iterations used in black box optimization algorithm.
 
+    optimizer : callable or None
+        Optimizer to use for optimization of set of relations and parameters
 
     Returns
     -------
@@ -368,8 +386,11 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
     """
     from skopt import gp_minimize
 
+    if optimizer is None:
+        optimizer = gp_minimize
+
     names = set(concepts.keys())
-    result = []
+    full_results = []
 
     for B in tqdm(names):
         # first try with all concepts
@@ -377,20 +398,17 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
         X = concept_subset(concepts, inputs, prefix)
         Y = concept_subset(concepts, {B})
 
-        # initial score
-        baseline = mapping_power(X, Y)
+        baseline = mapping_power(X, Y, models_subset=models_subset)
 
         if baseline < 0.0:
-            result.append([{}, {B}, 0.0])
-            continue
+            full_results.append([[], [B], 0])
 
         # objective: minimize number of input nodes, while
         # maintaining fraction of baseline performance
         space = [(True, False) for v in inputs]
-        space_length = len(space)*1.0
+        space_length = len(space) * 1.0
 
         pbar = tqdm(total=max_iter)
-        current_iter = [0]
 
         def obj(selection):
             selection = np.array(selection)
@@ -403,7 +421,7 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
             X = concept_subset(concepts, selection, prefix)
             Y = concept_subset(concepts, {B})
 
-            performance = mapping_power(X, Y)
+            performance = mapping_power(X, Y, models_subset=models_subset)
 
             pbar.update(1)
 
@@ -412,10 +430,11 @@ def all_n_to_1(concepts, prefix = None, discount=0.95, max_iter=32):
             else:
                 return len(selection) / space_length
 
-        solution = gp_minimize(obj, space, n_calls=max_iter)
+        solution = optimizer(obj, space, n_calls=max_iter, n_random_starts=min(max_iter, 10))
         found_concepts = inputs[np.array(solution.x)]
-        found_concepts = set(found_concepts)
+        found_concepts = list(found_concepts)
+        weight = baseline * discount
 
-        result.append([list(found_concepts), [B], baseline*discount])
+        full_results.append([found_concepts, [B], weight])
 
-    return result
+    return full_results

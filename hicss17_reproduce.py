@@ -10,8 +10,8 @@ see the experimental results folder, wiki subfolder, in v1 folder there.
 import os
 from allrelations.interface import extract_1_to_1
 
-dataset_path = os.path.join('datasets', 'wiki4he', 'wiki.csv')
-results_path = os.path.join('experimental_results', 'wiki4he')
+dataset_path = os.path.join('datasets', 'wiki4he_1', 'wiki.csv')
+results_path = os.path.join('experimental_results', 'wiki4he_1')
 
 for model in ['lasso', 'tree', 'knn', 'gbrt', 'ann']:
     extract_1_to_1(dataset_path, results_path, model)

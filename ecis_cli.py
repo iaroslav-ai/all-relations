@@ -1,14 +1,10 @@
-"""Command line interface (CLI) for extraction of weights of
-all one to one relations of concepts given some dataset. See
-https://github.com/InformationServiceSystems/all-relations
-for more details.
+"""Script used for experimentaion with ECIS submission.
 
 Usage:
-  main.py --help
-  main.py --dataset=<file> --model=<class> --saveto=<path> [--userfeatures]
+  ecis_cli.py --help
+  ecis_cli.py --model=<class> --discount=<float> --max_iter=<int> [--userfeatures]
 
 Options:
-  --dataset=<file>       Path of the CSV file, containing a dataset.
   --model=<class>        A class of models to use. Supported classes
                          are ['lasso', 'ann', 'knn', 'gbrt', 'tree'].
                          The options correspond to the following
@@ -20,7 +16,9 @@ Options:
                          'tree' is Regression Decision tree model.
                          Warning: training ANNs takes considerably
                          more time than for other models.
-  --saveto=<folder>      A folder where to save the results of computations.
+  --discount=<float>     Fraction of accuracy with all inputs to maintain.
+                         Controls the complexity of the relations.
+  --max_iter=<int>       Max iterations to run for.
   --userfeatures         Whether to use additional user features, specified
                          in the dataset, in addition to the features of the
                          concepts themselves.
@@ -29,15 +27,20 @@ Options:
 
 """
 
-from allrelations.interface import extract_1_to_1
+
+from allrelations.interface import extract_n_to_1
 from docopt import docopt
+import os
 
 if __name__ == "__main__":
-    arguments = docopt(__doc__, version='Oct 2018, ER18')
+    arguments = docopt(__doc__, version='Nov 2018')
 
-    extract_1_to_1(
-        dataset = arguments['--dataset=<file>'],
-        model = arguments['--model=<class>'],
-        saveto = arguments['--saveto=<folder>'],
-        use_resp_data= arguments['--userfeatures']
-    )
+    dataset_path = os.path.join('datasets', 'wiki4he', 'wiki.csv')
+    print(arguments)
+    model = str(arguments['--model'])
+    use_resp_data = arguments['--userfeatures']
+    discount = float(arguments['--discount'])
+    max_iter = int(arguments['--max_iter'])
+
+    results_path = os.path.join('experimental_results', 'nto1', 'wiki4he_%s' % discount)
+    extract_n_to_1(dataset_path, results_path, model, use_resp_data, max_iter=max_iter, discount=discount / 10.0)
