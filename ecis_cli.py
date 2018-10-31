@@ -43,4 +43,4 @@ if __name__ == "__main__":
     max_iter = int(arguments['--max_iter'])
 
     results_path = os.path.join('experimental_results', 'nto1', 'wiki4he_%s' % discount)
-    extract_n_to_1(dataset_path, results_path, model, use_resp_data, max_iter=max_iter, discount=discount / 10.0)
+    extract_n_to_1(dataset_path, results_path, model, use_resp_data, max_iter=max_iter, discount=discount)
