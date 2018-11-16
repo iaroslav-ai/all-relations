@@ -17,6 +17,7 @@ from sklearn.metrics import r2_score
 from sklearn.preprocessing import StandardScaler, Imputer
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, cross_val_predict
+from sklearn.base import BaseEstimator, TransformerMixin
 
 from string import digits
 
@@ -138,7 +139,7 @@ def pandas_to_concepts(data):
     return result
 
 
-def make_regressor(model_subset=None):
+def make_regressor_grid(model_subset=None):
     """
     Generate the necessary estimator model class for grid search.
 
@@ -190,8 +191,6 @@ def make_regressor(model_subset=None):
         }
     }
 
-    
-    
     # user can specify subset of models to be used
     if model_subset is None:
         choices = model_choices.keys()
@@ -237,7 +236,7 @@ def mapping_power(X, Y, models_subset=None):
     for y in Y.T:
         I = ~np.isnan(y) # select rows where outputs are not missing
 
-        yp = cross_val_predict(make_regressor(models_subset), X[I], y[I])
+        yp = cross_val_predict(make_regressor_grid(models_subset), X[I], y[I])
 
         y_true.append(y[I])
         y_pred.append(yp)
@@ -333,15 +332,163 @@ def concept_subset(concepts, names, prefix = None):
     return result
 
 
-def get_map(X, Y, models_subset, inputs, max_iter, concepts, prefix, discount, optimizer, B):
-    # initial score
+class ColumnsSelector(BaseEstimator, TransformerMixin):
+    """This transformer simply selects a subset of columns from
+    the dataset. Useful for feature selection."""
+    def __init__(self, index_set, active=True):
+        self.index_set = index_set
+        self.active = active
+
+    def transform(self, X, y=None):
+        if self.active:
+            return X[:, self.index_set]
+        else:
+            return X[:, 0:0] # returns an empty column
+
+    def fit(self, X, y=None, **fit_params):
+        return self
+
+from sklearn.pipeline import FeatureUnion
+from skopt.space import Categorical, Real, Integer
+from skopt.utils import point_asdict, point_aslist
+from searchgrid import set_grid, build_param_grid
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 
 
-    return [found_concepts, [B], weight]
+def minimize_inputs(concepts, target, prefix=None, models_subset=None, discount=0.95, max_iter=32, optimizer=None):
+    feature_selection_steps = []  # feature extraction steps
+    pipeline_steps = []  # overall data science pipeline steps
 
+    X = {c:v for c,v in concepts.items() if c != target}
+    y = concepts[target]
 
-import joblib
-from joblib.parallel import Parallel, delayed
+    idx = 0
+    X_num = []
+    N_concepts = len(X)
+
+    for concept in X:
+        Xcol = X[concept]
+        M = Xcol.shape[-1]  # number of columns in concept
+
+        # extend the total dataset
+        X_num.append(Xcol)
+
+        # make a selector
+        selector_indicies = tuple(range(idx, idx+M))
+        selector = ColumnsSelector(selector_indicies)  # this class can select subset of features
+        # set the desired options
+        selector = set_grid(selector, active=[Categorical([False, True])])
+        feature_selection_steps.append((concept, selector))
+        idx += M
+
+    # make a proper dataset
+    X_num = np.column_stack(X_num)
+
+    # drop empty values in target
+    I = ~np.any(np.isnan(y), axis=-1)
+    X_num = X_num[I]
+    y = y[I]
+
+    X_train, X_test, y_train, y_test = train_test_split(X_num, y)
+
+    # this will extract the features, if necessary
+    features = FeatureUnion(feature_selection_steps)
+
+    pipeline_steps.append(('features', features))
+    pipeline_steps.append(('impute', SimpleImputer()))
+    pipeline_steps.append(('scale', StandardScaler()))
+
+    estimator = set_grid(
+        GradientBoostingRegressor(),
+        loss=[Categorical(['ls', 'lad', 'huber'])],
+        learning_rate=[Real(1e-4, 1.0, 'log-uniform')],
+        n_estimators=[Integer(32, 512)],
+        max_depth=[Integer(1, 5)]
+    )
+
+    pipeline_steps.append(('model', estimator))
+
+    def used_concepts(params):
+        selection = []
+        for p in params:
+            if "features" in p:
+                if params[p]:
+                    selection.append(p.split("__")[1])
+
+        return selection
+
+    # objective to be minimized; depends on whether all features are used or only subset
+    class objective:
+        def __init__(self, select_subset, base_score, model, search_spaces):
+            self.select_subset = select_subset
+            self.base_score = base_score
+            self.model = model
+            self.search_spaces = search_spaces
+
+        def __call__(self, p):
+            # task: maximize the score
+            score = 0.0
+            params = point_asdict(self.search_spaces, p)
+
+            try:
+
+                self.model.set_params(**params)
+                all_scores = []
+                for i in range(y.shape[-1]):
+                    scores = cross_val_score(self.model, X_train, y_train[:, i], n_jobs=1, cv=5)
+                    all_scores.append(scores)
+
+                avg_score = np.mean(all_scores)
+
+                if self.select_subset:
+                    if avg_score > self.base_score * discount:
+                        # count how many concepts have been used
+                        N_selection = len(used_concepts(params))
+
+                        # if same size of concept subset is used, prefer the one with higher score
+                        score = (N_concepts - N_selection + avg_score) / N_concepts
+                else:
+                    score = avg_score
+
+            except BaseException as ex:
+                pass
+
+            return -score
+
+    # First experiment: select hyperaprameters only, with subset of features
+    model = Pipeline(pipeline_steps[1:])
+    search_spaces = {k:v[0] for k, v in build_param_grid(model).items()}
+    search_dims = point_aslist(search_spaces, search_spaces)
+
+    obj = objective(False, None, model, search_spaces)
+    solution = optimizer(obj, search_dims, n_calls=max_iter, n_random_starts=min(max_iter, 10))
+
+    # Now minimize subset of concepts used
+    model = Pipeline(pipeline_steps)
+    search_spaces = {k:v[0] for k, v in build_param_grid(model).items()}
+    search_dims = point_aslist(search_spaces, search_spaces)
+
+    obj.base_score = -solution.fun
+    obj.select_subset = True
+    obj.model = model
+    obj.search_spaces = search_spaces
+
+    solution = optimizer(obj, search_dims, n_calls=max_iter, n_random_starts=min(max_iter, 10))
+    best_params_ = point_asdict(search_spaces, solution.x)
+    model.set_params(**best_params_)
+
+    weights = []
+    for i in range(y.shape[-1]):
+        model.fit(X_train, y_train[:, i])
+        weight = model.score(X_test, y_test[:, i])
+        weights.append(weight)
+
+    selection = used_concepts(best_params_)
+    weight = np.mean(weights)
+
+    return weight, selection
 
 
 def all_n_to_1(concepts, prefix=None, models_subset=None, discount=0.95, max_iter=32, optimizer=None):
@@ -394,47 +541,7 @@ def all_n_to_1(concepts, prefix=None, models_subset=None, discount=0.95, max_ite
 
     for B in tqdm(names):
         # first try with all concepts
-        inputs = np.array([v for v in (names - {B})])
-        X = concept_subset(concepts, inputs, prefix)
-        Y = concept_subset(concepts, {B})
-
-        baseline = mapping_power(X, Y, models_subset=models_subset)
-
-        if baseline < 0.0:
-            full_results.append([[], [B], 0])
-
-        # objective: minimize number of input nodes, while
-        # maintaining fraction of baseline performance
-        space = [(True, False) for v in inputs]
-        space_length = len(space) * 1.0
-
-        pbar = tqdm(total=max_iter)
-
-        def obj(selection):
-            selection = np.array(selection)
-
-            if np.all(~selection):
-                return 1.0
-
-            selection = inputs[selection]
-
-            X = concept_subset(concepts, selection, prefix)
-            Y = concept_subset(concepts, {B})
-
-            performance = mapping_power(X, Y, models_subset=models_subset)
-
-            pbar.update(1)
-
-            if performance < baseline * discount:
-                return 1.0
-            else:
-                return len(selection) / space_length
-
-        solution = optimizer(obj, space, n_calls=max_iter, n_random_starts=min(max_iter, 10))
-        found_concepts = inputs[np.array(solution.x)]
-        found_concepts = list(found_concepts)
-        weight = baseline * discount
-
+        weight, found_concepts = minimize_inputs(concepts, B, discount=discount, max_iter=max_iter, optimizer=optimizer)
         full_results.append([found_concepts, [B], weight])
 
     return full_results
