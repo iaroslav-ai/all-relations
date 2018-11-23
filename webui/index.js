@@ -22,7 +22,7 @@ function reset_csv_table(){
     }
     concepts.sort()
 
-    var data = [["to"]]
+    var data = [[" "]]
 
     // headers are added here
     for(var c of concepts){
@@ -46,15 +46,15 @@ function reset_csv_table(){
     // calculate the sizes of columns
     var autoWidths = [0] 
     var mxWd = 0
-    var char_size = 10
+    var char_size = 9
     for(var c of concepts){
-        var column_size = c.length*char_size
+        var column_size = (3+c.length)*char_size
         autoWidths.push(column_size)
         if(mxWd < column_size){
             mxWd = column_size
         }
     }
-    autoWidths[0] = mxWd
+    autoWidths[0] = mxWd + 4*char_size // account for "from"
 
     // render the CSV
     $('#relation_table').jexcel({ data:data, colWidths: autoWidths});
@@ -247,11 +247,42 @@ class SGDRegressor{
     constructor(params){
         this.params = params
         this.model = null
+
+        this.scale = null
+        this.scale_y = null
+    }
+
+    async transform_X(X){
+        if(this.scale === null){
+            // calculate initial statistics
+            this.mean = tf.mean(X, 0)
+            var variance = tf.mean(tf.pow(tf.abs(tf.sub(X, this.mean)),2), 0)
+            this.scale = tf.sqrt(variance)
+        }
+
+        return X.sub(this.mean).div(this.scale)
+    }
+
+    async transform_y(y){
+        if(this.scale_y === null){
+            this.mean_y = tf.mean(y)
+            this.scale_y = tf.max(tf.abs(y.sub(this.mean_y)))
+        }
+
+        return y.sub(this.mean_y).div(this.scale_y)
+    }
+
+    async inverse_t_y(y){
+        return y.mul(this.scale_y).add(this.mean_y)
     }
 
     async fit(X, y){
         var X = tf.tensor2d(X)
         var y = tf.tensor1d(y)
+
+        // preprocess data for numeric stability
+        X = await this.transform_X(X)
+        y = await this.transform_y(y)
 
         var l1_ratio = this.params['l1_ratio']
         var alpha = this.params['alpha']
@@ -278,7 +309,7 @@ class SGDRegressor{
         
         await model.compile({
             loss: "meanSquaredError", 
-            optimizer: tf.train.sgd(learning_rate)
+            optimizer: tf.train.adam(learning_rate)
         });
 
         await model.fit(X, y, {'epochs': epochs, 'batchSize': batch_size})
@@ -288,10 +319,16 @@ class SGDRegressor{
 
     async predict(X){
         var model = this.model
+        X = await this.transform_X(X)
         var y_pred = await model.predict(X)
 
         // drop an extra dimension
         y_pred = tf.reshape(y_pred, [-1])
+
+        // bring back to original range
+        y_pred = await this.inverse_t_y(y_pred)
+
+        // return in JS array format
         return await y_pred.data()
     }
 
@@ -315,7 +352,7 @@ async function train_model(X, y){
     var model = new SGDRegressor({
         'alpha': 0.0001,
         'l1_ratio': 0.15,
-        'max_iter': 100,
+        'max_iter': 256,
         'eta0': 0.01,
         'batch_size': 128
     })
