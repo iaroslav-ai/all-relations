@@ -1,0 +1,102 @@
+<html>
+    <head>
+        <title>Web AR v1.0</title>
+
+        <script src="./papaparse.min.js"></script>
+        <script src="./tf.min.js"></script>
+        <script src="./index.js"></script>
+
+
+        <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Roboto:300,300italic,700,700italic">
+        <link rel="stylesheet" href="//cdn.rawgit.com/necolas/normalize.css/master/normalize.css">
+        <link rel="stylesheet" href="//cdn.rawgit.com/milligram/milligram/master/dist/milligram.min.css">
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jexcel/1.5.7/js/jquery.jexcel.js"></script>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jexcel/1.5.7/css/jquery.jexcel.css" type="text/css" />
+
+        <script src="https://cdn.polyfill.io/v2/polyfill.min.js?features=Promise,fetch"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.2.20/cytoscape.min.js"></script>
+    </head>
+    <body>
+
+
+        <main class='wrapper'>
+            <section class='container'>
+                <div style='text-align: center;'></div>
+
+                <h1>Web all-relations v0.1</h1>
+                <h2>Extract all 1 to 1 relations from your dataset in CSV format.</h2>
+            </section>
+
+            <section class='container'>
+                <p>
+                    Use this webpage to run extraction of all one to one relations
+                    from the dataset that you can provide below in a CSV format. The
+                    column names of the dataset should follow a specific format: 
+                    <i>concept name_indicator name</i> .
+                </p>
+                <p>
+                    Mind the underscore in the format - it should separate the name of concept 
+                    from name of the particular indicator.
+                    In such format, this web service can parse the set of concepts 
+                    and corresponding indicators, and it takes care of the rest! Just 
+                    select the CSV file using the button below and let the magic happen.
+                    You can also download example datasets using the links below.
+                </p>
+                <p>
+                    You can monitor the progress of relation extraction in the text areas
+                    below, separate for training of machine learning and relation
+                    extraction. After the algorithm terminates, the results will be presented
+                    in the table below, as well as in a graph representation. For graph 
+                    representation, threshold on relation weight can be specified interactively
+                    to obtain graphs of different sparsity.
+                </p>
+                <div class="row">
+                        <div class="column column-50">
+                                <label>Select the dataset</label>
+                                <input type="file" id="files" onchange="process_csv_file()">
+                        </div>
+                        <div class="column column-50">
+                                <label>Example datasets:</label>
+                                <a href='./gender_discrimination.csv'> gender_discrimination.csv </a>
+                        </div>
+                </div>
+
+                <div class="row">
+                        <div class="column column-50">
+                            <label>Model training progress</label>
+                            <textarea id='models_log'> </textarea> 
+                        </div>
+                        <div class="column column-50">
+                            <label>Relation extraction progress</label>
+                            <textarea id='relations_log'></textarea> 
+                        </div>
+                </div>
+
+                <label>Table of relations</label>
+                <div id='relation_table'></div>
+                <button onclick="download_csv()">Download as CSV</button>
+
+                <script>
+                    function download_csv(){
+                        $('#relation_table').jexcel('download')
+                    }
+                </script>
+                
+                <label>Graph of relations</label>
+                <i>Threshold on r<sup>2</sup> [0.0 ... 1.0]: </i>
+                <input type="range" min="1" max="100" value="5" class="slider" id="relation_threshold" onchange="reset_graph()">
+                <i id='threshold_value'></i>
+
+                <div id="cy" style="width:100%; height: 300px;"></div>
+                <!-- Load application code at the end to ensure DOM is loaded -->
+                <script>
+                           
+                </script>
+                
+
+            </section>
+        </main>
+    </body>
+</html>
